@@ -91,6 +91,20 @@ def parse_gitlab_url(url):
     if not project_path or not resource_path:
         return None
 
+    wiki_match = re.match(r'^wikis/(.+)', resource_path)
+    if wiki_match:
+        wiki_slug = wiki_match.group(1)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        project_url = f"{base_url}/{project_path}"
+        return {
+            'project_url': project_url,
+            'base_url': base_url,
+            'project_path': project_path,
+            'resource_type': 'wikis',
+            'wiki_slug': wiki_slug,
+            'heading_anchor': urllib.parse.unquote(parsed.fragment) if parsed.fragment else None,
+        }
+
     match = re.match(r'^(work_items|merge_requests)/(\d+)', resource_path)
     if not match:
         return None
@@ -206,6 +220,76 @@ def generate_issue_blocks(url, parsed, token):
     return generate_blocks(url, title, icon_url, description)
 
 
+def extract_heading_section(content, anchor):
+    """Markdownコンテンツから指定アンカーに対応する見出しとその本文を抽出する。"""
+    lines = content.split('\n')
+    heading_text = None
+    section_lines = []
+    heading_level = None
+    in_section = False
+
+    for line in lines:
+        heading_match = re.match(r'^(#{1,6})\s+(.+)', line)
+        if heading_match:
+            level = len(heading_match.group(1))
+            text = heading_match.group(2).strip()
+            line_anchor = re.sub(r'[^\w\s-]', '', text.lower())
+            line_anchor = re.sub(r'[\s]+', '-', line_anchor)
+
+            if in_section:
+                if level <= heading_level:
+                    break
+                section_lines.append(line)
+            elif line_anchor == anchor:
+                heading_text = text
+                heading_level = level
+                in_section = True
+        elif in_section:
+            section_lines.append(line)
+
+    if heading_text is None:
+        return None, None
+
+    body = '\n'.join(section_lines).strip()
+    return heading_text, body
+
+
+def generate_wiki_blocks(url, parsed, token):
+    encoded_path = urllib.parse.quote(parsed['project_path'], safe='')
+    wiki_slug = parsed['wiki_slug']
+
+    wiki_page = gitlab_api_get(
+        parsed['base_url'],
+        f"projects/{encoded_path}/wikis/{urllib.parse.quote(urllib.parse.unquote(wiki_slug), safe='')}",
+        token
+    )
+    if not wiki_page:
+        return None
+
+    icon_url = urllib.parse.urljoin(parsed['base_url'], f'/assets/{FAVICON_FILENAME}')
+    page_title = wiki_page.get('title', wiki_slug)
+
+    if parsed['heading_anchor']:
+        heading_text, section_body = extract_heading_section(
+            wiki_page.get('content', ''),
+            parsed['heading_anchor']
+        )
+        if heading_text:
+            title = '{} / {} - {}'.format(page_title, heading_text, parsed['project_path'])
+            description = truncate(
+                (section_body or '').replace('\r\n', '\n'),
+                MAX_DESCRIPTION_LINE_NUM, MAX_DESCRIPTION_LENGTH
+            )
+            return generate_blocks(url, title, icon_url, description)
+
+    title = '{} - {}'.format(page_title, parsed['project_path'])
+    description = truncate(
+        (wiki_page.get('content') or '').replace('\r\n', '\n'),
+        MAX_DESCRIPTION_LINE_NUM, MAX_DESCRIPTION_LENGTH
+    )
+    return generate_blocks(url, title, icon_url, description)
+
+
 def generate_merge_request_blocks(url, parsed, token):
     encoded_path = urllib.parse.quote(parsed['project_path'], safe='')
 
@@ -281,6 +365,8 @@ def handle_link_shared_events(body, ack, client):
             blocks = generate_issue_blocks(url, parsed, token)
         elif parsed['resource_type'] == 'merge_requests':
             blocks = generate_merge_request_blocks(url, parsed, token)
+        elif parsed['resource_type'] == 'wikis':
+            blocks = generate_wiki_blocks(url, parsed, token)
 
         if blocks:
             unfurls[url] = blocks
