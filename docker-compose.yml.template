@@ -1,0 +1,14 @@
+version: '3'
+services:
+  slack-unfurl-gitlab:
+    image: lltcggie/slack-unfurl-gitlab:latest
+    container_name: slack-unfurl-gitlab
+    restart: always
+    environment:
+      SLACK_APP_TOKEN: xapp-example
+      SLACK_BOT_TOKEN: xoxb-example
+      MAX_DESCRIPTION_LINE_NUM: 5
+      MAX_DESCRIPTION_LENGTH: 500
+      FAVICON_FILENAME: favicon.ico
+    volumes:
+      - "./data:/src/data"

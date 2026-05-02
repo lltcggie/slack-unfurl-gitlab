@@ -1,0 +1,3 @@
+requests
+slack-bolt
+urllib3
